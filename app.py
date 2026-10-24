@@ -24,10 +24,8 @@ def load_nlp():
     try:
         return spacy.load("en_core_web_lg")
     except OSError:
-        st.warning("Downloading spaCy en_core_web_lg model...")
-        from spacy.cli import download
-        download("en_core_web_lg")
-        return spacy.load("en_core_web_lg")
+        import en_core_web_lg
+        return en_core_web_lg.load()
 
 nlp = load_nlp()
 
