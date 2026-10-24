@@ -1,24 +1,72 @@
 """
-📰 Fake News Prediction Comparator: Gradient Boosting vs Random Forest
+Fake News Prediction Comparator: Gradient Boosting vs Random Forest
 Run with: streamlit run app.py
 Requires: gb_best_pipeline.pkl, rf_best_pipeline.pkl
 """
 
-import streamlit as st
+import os
 import pickle
+
 import numpy as np
 import spacy
-import os
+import streamlit as st
 
-# 1. Page Configuration
+# ---------------------------------------------------------------- page setup
 st.set_page_config(
-    page_title="Fake News Model Comparator",
+    page_title="Fake News Detector",
     page_icon="📰",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# 2. Cache spaCy model loading
+GREEN, GREEN_BG = "#16a34a", "rgba(22,163,74,0.12)"
+RED, RED_BG = "#dc2626", "rgba(220,38,38,0.12)"
+AMBER, AMBER_BG = "#d97706", "rgba(217,119,6,0.12)"
+
+st.markdown(
+    f"""
+<style>
+.block-container {{ padding-top: 2rem; max-width: 1150px; }}
+.hero {{
+    padding: 1.6rem 1.8rem; border-radius: 18px; margin-bottom: 1.2rem;
+    background: linear-gradient(135deg, #1e293b 0%, #334155 55%, #475569 100%);
+    color: #f8fafc;
+}}
+.hero h1 {{ margin: 0; font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; }}
+.hero p {{ margin: .35rem 0 0; color: #cbd5e1; font-size: 1rem; }}
+.card {{
+    border-radius: 16px; padding: 1.3rem 1.4rem; height: 100%;
+    border: 1px solid rgba(128,128,128,.25);
+    border-left-width: 8px; border-left-style: solid;
+}}
+.card.real {{ background: {GREEN_BG}; border-left-color: {GREEN}; }}
+.card.fake {{ background: {RED_BG};   border-left-color: {RED}; }}
+.card.na   {{ background: {AMBER_BG}; border-left-color: {AMBER}; }}
+.card .model {{ font-size: .85rem; opacity: .75; text-transform: uppercase; letter-spacing: .06em; }}
+.card .verdict {{ font-size: 2rem; font-weight: 800; margin: .2rem 0 .1rem; }}
+.card.real .verdict {{ color: {GREEN}; }}
+.card.fake .verdict {{ color: {RED}; }}
+.card.na .verdict {{ color: {AMBER}; }}
+.card .conf {{ font-size: 1rem; opacity: .85; margin-bottom: .8rem; }}
+.bar {{ display: flex; height: 14px; border-radius: 999px; overflow: hidden; background: rgba(128,128,128,.2); }}
+.bar .r {{ background: {GREEN}; }}
+.bar .f {{ background: {RED}; }}
+.legend {{ display: flex; justify-content: space-between; font-size: .85rem; margin-top: .4rem; opacity: .9; }}
+.banner {{ border-radius: 12px; padding: .9rem 1.2rem; font-weight: 600; margin: .4rem 0 1.1rem; }}
+.banner.real {{ background: {GREEN_BG}; color: {GREEN}; border: 1px solid {GREEN}; }}
+.banner.fake {{ background: {RED_BG}; color: {RED}; border: 1px solid {RED}; }}
+.banner.mixed {{ background: {AMBER_BG}; color: {AMBER}; border: 1px solid {AMBER}; }}
+.stButton > button[kind="primary"] {{
+    border-radius: 12px; padding: .65rem 1.4rem; font-weight: 700; border: none;
+    background: linear-gradient(135deg, #2563eb, #7c3aed);
+}}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+
+# ------------------------------------------------------------- model loading
 @st.cache_resource
 def load_nlp():
     try:
@@ -27,154 +75,144 @@ def load_nlp():
         import en_core_web_lg
         return en_core_web_lg.load()
 
-nlp = load_nlp()
 
-# 3. Load Trained Pipelines
 @st.cache_resource
 def load_pipelines():
-    gb_path = "gb_best_pipeline.pkl"
-    rf_path = "rf_best_pipeline.pkl"
-    
-    gb_model = None
-    rf_model = None
-    
-    if os.path.exists(gb_path):
-        with open(gb_path, "rb") as f:
-            gb_model = pickle.load(f)
-    else:
-        st.sidebar.error(f"❌ '{gb_path}' not found in current folder.")
-        
-    if os.path.exists(rf_path):
-        with open(rf_path, "rb") as f:
-            rf_model = pickle.load(f)
-    else:
-        st.sidebar.error(f"❌ '{rf_path}' not found in current folder.")
-        
-    return gb_model, rf_model
+    models = {}
+    for key, path in (("gb", "gb_best_pipeline.pkl"), ("rf", "rf_best_pipeline.pkl")):
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                models[key] = pickle.load(f)
+        else:
+            models[key] = None
+    return models["gb"], models["rf"]
 
+
+nlp = load_nlp()
 gb_pipeline, rf_pipeline = load_pipelines()
 
-# 4. Streamlit Sidebar
-st.sidebar.title("🎛️ Pipeline Settings")
-st.sidebar.markdown("**Loaded Models:**")
-st.sidebar.info("• **Gradient Boosting:** 90.19% CV\n• **Random Forest:** 87.49% CV")
-
-threshold = st.sidebar.slider(
-    "Decision Threshold (P(Real) ≥ θ)",
-    min_value=0.10,
-    max_value=0.90,
-    value=0.50,
-    step=0.05,
-    help="Default is 0.50. Articles with P(Real) >= threshold are classified as REAL (1)."
-)
-
-sample_choice = st.sidebar.selectbox(
-    "Load Sample Article",
-    [
-        "Custom Article",
-        "Sample: Hillary Clinton FBI Investigation (Fake)",
-        "Sample: Kerry to go to Paris (Real)",
-        "Sample: The Battle of New York Primary (Real)",
-        "Sample: Paul Ryan Trump Rally (Fake)",
-    ]
-)
-
-samples_dict = {
-    "Sample: Hillary Clinton FBI Investigation (Fake)": {
+# ------------------------------------------------------------------- samples
+SAMPLES = {
+    "Custom article": {"title": "", "text": ""},
+    "Hillary Clinton FBI investigation (Fake)": {
         "title": "You Can Smell Hillary's Fear",
-        "text": "Daniel Greenfield, a Shillman Journalism Fellow at the Freedom Center, is a New York writer focusing on radical Islam. In the final stretch of the election, Hillary Rodham Clinton has gone to war with the FBI. The FBI is under attack by everyone from Obama to CNN. Hillary's people have circulated a letter attacking Comey. You can smell the fear. Whatever she is afraid of, it lies buried in her emails."
+        "text": "Daniel Greenfield, a Shillman Journalism Fellow at the Freedom Center, is a New York writer focusing on radical Islam. In the final stretch of the election, Hillary Rodham Clinton has gone to war with the FBI. The FBI is under attack by everyone from Obama to CNN. Hillary's people have circulated a letter attacking Comey. You can smell the fear. Whatever she is afraid of, it lies buried in her emails.",
     },
-    "Sample: Kerry to go to Paris (Real)": {
+    "Kerry to go to Paris (Real)": {
         "title": "Kerry to go to Paris in gesture of sympathy",
-        "text": "U.S. Secretary of State John F. Kerry said Monday that he will stop in Paris later this week, amid criticism that no top American officials attended Sunday's unity march against terrorism. Kerry said he expects to arrive in Paris Thursday evening, as he heads home after a week abroad."
+        "text": "U.S. Secretary of State John F. Kerry said Monday that he will stop in Paris later this week, amid criticism that no top American officials attended Sunday's unity march against terrorism. Kerry said he expects to arrive in Paris Thursday evening, as he heads home after a week abroad.",
     },
-    "Sample: The Battle of New York Primary (Real)": {
+    "The Battle of New York primary (Real)": {
         "title": "The Battle of New York: Why This Primary Matters",
-        "text": "It's primary day in New York and front-runners Hillary Clinton and Donald Trump are leading in the polls. Trump is now vowing to win enough delegates to clinch the Republican nomination and prevent a contested convention."
+        "text": "It's primary day in New York and front-runners Hillary Clinton and Donald Trump are leading in the polls. Trump is now vowing to win enough delegates to clinch the Republican nomination and prevent a contested convention.",
     },
-    "Sample: Paul Ryan Trump Rally (Fake)": {
+    "Paul Ryan Trump rally (Fake)": {
         "title": "Watch The Exact Moment Paul Ryan Committed Political Suicide",
-        "text": "Paul Ryan re-re-re-reversed course and announced that he was back on the Trump Train after all. Suddenly, Ryan was appearing at a pro-Trump rally and boldly declaring that he already sent in his vote. It was a surreal moment."
-    }
+        "text": "Paul Ryan re-re-re-reversed course and announced that he was back on the Trump Train after all. Suddenly, Ryan was appearing at a pro-Trump rally and boldly declaring that he already sent in his vote. It was a surreal moment.",
+    },
 }
 
-# 5. Main View Header
-st.title("📰 Fake News Detection: Model Prediction Comparator")
-st.caption("Side-by-side inference comparison using Gradient Boosting and Random Forest pipelines.")
+# ------------------------------------------------------------------- sidebar
+st.sidebar.title("⚙️ Settings")
+threshold = st.sidebar.slider(
+    "Decision threshold θ",
+    0.10, 0.90, 0.50, 0.05,
+    help="An article is classified REAL when P(Real) ≥ θ.",
+)
+sample_choice = st.sidebar.selectbox("Load a sample article", list(SAMPLES))
+st.sidebar.markdown("---")
+st.sidebar.markdown("**Models**")
+st.sidebar.caption("🌲 Gradient Boosting · 90.19% CV")
+st.sidebar.caption("🌴 Random Forest · 87.49% CV")
+if gb_pipeline is None:
+    st.sidebar.error("gb_best_pipeline.pkl not found")
+if rf_pipeline is None:
+    st.sidebar.error("rf_best_pipeline.pkl not found")
 
-# Input Form
-title_input = ""
-text_input = ""
+# -------------------------------------------------------------------- header
+st.markdown(
+    """
+<div class="hero">
+  <h1>📰 Fake News Detector</h1>
+  <p>Compare Gradient Boosting and Random Forest predictions side by side.</p>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
-if sample_choice in samples_dict:
-    title_input = samples_dict[sample_choice]["title"]
-    text_input = samples_dict[sample_choice]["text"]
+sample = SAMPLES[sample_choice]
+# A key per sample makes the inputs refresh when the selection changes.
+title_input = st.text_input(
+    "Article title", value=sample["title"], placeholder="Enter headline…",
+    key=f"title_{sample_choice}",
+)
+article_text = st.text_area(
+    "Article content", value=sample["text"], height=180,
+    placeholder="Paste the full article text…", key=f"text_{sample_choice}",
+)
+run = st.button("Analyze article", type="primary")
 
-col_title = st.text_input("News Article Title", value=title_input, placeholder="Enter headline...")
-article_text = st.text_area("Article Content", value=text_input, height=180, placeholder="Paste full article text...")
 
-if st.button("🚀 Compare Model Predictions", type="primary"):
-    combined_text = f"{col_title} {article_text}".strip()
-    
-    if not combined_text:
-        st.warning("Please provide article title or body content.")
+# ----------------------------------------------------------------- inference
+def predict(pipe, vec, theta):
+    if pipe is None:
+        return None
+    if hasattr(pipe, "predict_proba"):
+        probs = pipe.predict_proba(vec)[0]  # [P(Fake), P(Real)]
+        p_fake, p_real = float(probs[0]), float(probs[1])
     else:
-        with st.spinner("Extracting 300-d spaCy word embeddings & running pipelines..."):
-            # Step A: Vectorize text using spaCy large model (300 dimensions)
-            doc = nlp(combined_text)
-            vector_300d = np.array(doc.vector).reshape(1, -1)
-            
-            # Step B: Model Inferences
-            def predict_with_pipeline(pipe, vec, theta):
-                if pipe is None:
-                    return "Model Unavailable", 0.5, 0.5
-                
-                # Predict probabilities
-                if hasattr(pipe, "predict_proba"):
-                    probs = pipe.predict_proba(vec)[0] # [P(Fake), P(Real)]
-                    p_fake = float(probs[0])
-                    p_real = float(probs[1])
-                else:
-                    pred = pipe.predict(vec)[0]
-                    p_real = 1.0 if pred == 1 else 0.0
-                    p_fake = 1.0 - p_real
-                    
-                label = "REAL (1)" if p_real >= theta else "FAKE (0)"
-                return label, p_fake, p_real
+        p_real = 1.0 if pipe.predict(vec)[0] == 1 else 0.0
+        p_fake = 1.0 - p_real
+    return {"real": p_real >= theta, "p_real": p_real, "p_fake": p_fake}
 
-            gb_label, gb_pfake, gb_preal = predict_with_pipeline(gb_pipeline, vector_300d, threshold)
-            rf_label, rf_pfake, rf_preal = predict_with_pipeline(rf_pipeline, vector_300d, threshold)
-            
-        st.markdown("---")
-        
-        # Step C: Consensus Callout
-        agreed = (gb_label == rf_label)
-        if agreed:
-            st.success(f"🤝 **Consensus Reached:** Both pipelines classified this article as **{gb_label}**.")
-        else:
-            st.warning(f"⚠️ **Model Divergence:** Gradient Boosting predicted **{gb_label}**, but Random Forest predicted **{rf_label}**.")
 
-        # Step D: Side-by-side Columns
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("🌲 Gradient Boosting Pipeline")
-            st.markdown(f"`gb_best_pipeline.pkl` *(CV Score: 90.19%)*")
-            if "REAL" in gb_label:
-                st.metric("Prediction", "REAL NEWS", delta=f"{gb_preal*100:.1f}% confidence")
+def card(title, result):
+    if result is None:
+        return f"""<div class="card na"><div class="model">{title}</div>
+        <div class="verdict">UNAVAILABLE</div><div class="conf">Model file missing</div></div>"""
+    cls = "real" if result["real"] else "fake"
+    label = "REAL NEWS" if result["real"] else "FAKE NEWS"
+    conf = result["p_real"] if result["real"] else result["p_fake"]
+    r, f = result["p_real"] * 100, result["p_fake"] * 100
+    icon = "✅" if result["real"] else "🚫"
+    return f"""
+    <div class="card {cls}">
+      <div class="model">{title}</div>
+      <div class="verdict">{icon} {label}</div>
+      <div class="conf">{conf*100:.1f}% confidence</div>
+      <div class="bar"><div class="r" style="width:{r}%"></div><div class="f" style="width:{f}%"></div></div>
+      <div class="legend"><span>Real {r:.1f}%</span><span>Fake {f:.1f}%</span></div>
+    </div>"""
+
+
+if run:
+    combined = f"{title_input} {article_text}".strip()
+    if not combined:
+        st.warning("Please enter a title or some article text.")
+    else:
+        with st.spinner("Analyzing…"):
+            vec = np.array(nlp(combined).vector).reshape(1, -1)
+            gb = predict(gb_pipeline, vec, threshold)
+            rf = predict(rf_pipeline, vec, threshold)
+
+        if gb and rf:
+            if gb["real"] == rf["real"]:
+                cls = "real" if gb["real"] else "fake"
+                verdict = "REAL" if gb["real"] else "FAKE"
+                st.markdown(
+                    f'<div class="banner {cls}">Both models agree: this article looks <b>{verdict}</b>.</div>',
+                    unsafe_allow_html=True,
+                )
             else:
-                st.metric("Prediction", "FAKE NEWS", delta=f"-{gb_pfake*100:.1f}% confidence", delta_color="inverse")
-                
-            st.progress(gb_preal, text=f"P(Real): {gb_preal*100:.1f}% | P(Fake): {gb_pfake*100:.1f}%")
-            st.caption("Parameters: n_estimators=200, lr=0.2, max_depth=5")
+                st.markdown(
+                    '<div class="banner mixed">⚠️ The models disagree. Treat this result with caution.</div>',
+                    unsafe_allow_html=True,
+                )
 
-        with col2:
-            st.subheader("🌴 Random Forest Pipeline")
-            st.markdown(f"`rf_best_pipeline.pkl` *(CV Score: 87.49%)*")
-            if "REAL" in rf_label:
-                st.metric("Prediction", "REAL NEWS", delta=f"{rf_preal*100:.1f}% confidence")
-            else:
-                st.metric("Prediction", "FAKE NEWS", delta=f"-{rf_pfake*100:.1f}% confidence", delta_color="inverse")
-                
-            st.progress(rf_preal, text=f"P(Real): {rf_preal*100:.1f}% | P(Fake): {rf_pfake*100:.1f}%")
-            st.caption("Parameters: n_estimators=200, max_depth=10, min_samples_split=2")
+        c1, c2 = st.columns(2, gap="large")
+        c1.markdown(card("🌲 Gradient Boosting", gb), unsafe_allow_html=True)
+        c2.markdown(card("🌴 Random Forest", rf), unsafe_allow_html=True)
+        st.caption(
+            "For research and learning only. Model predictions can be wrong, "
+            "so verify news with trusted sources."
+        )
