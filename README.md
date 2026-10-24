@@ -9,6 +9,9 @@ This project focuses on **detecting fake news articles** using advanced Natural 
 With the explosion of misinformation online, detecting fake news automatically has become crucial. This project presents a machine learning pipeline that converts news text into dense semantic vectors using **spaCy**, followed by classification using multiple supervised learning algorithms.
 
 ---
+## Live Link
+[![Live App](https://img.shields.io/badge/Live%20App-Streamlit-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)](https://shanta0338-detecting-fake-news-using-machine-learnin-app-nzdqzf.streamlit.app/)
+---
 
 ## 🗂️ Dataset
 
